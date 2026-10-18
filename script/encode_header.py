@@ -2,8 +2,8 @@
 """Encode an eth_getBlockByNumber JSON response as an execution-header RLP hex string.
 
 Uses only Python's standard library. Read a JSON file argument or stdin. Supports
-headers through Prague; never silently drops unknown new consensus header fields.
-Compare the result's `cast keccak` with the block's published hash before opening.
+headers through the Sepolia block-access-list/slot-number extensions; never silently drops unknown new consensus header fields.
+Compare the result's `cast keccak` with the block's published hash before drawing.
 """
 
 import json
@@ -16,11 +16,11 @@ BASE_FIELDS = (
 )
 TRAILING_FIELDS = (
     "baseFeePerGas", "withdrawalsRoot", "blobGasUsed", "excessBlobGas",
-    "parentBeaconBlockRoot", "requestsHash",
+    "parentBeaconBlockRoot", "requestsHash", "blockAccessListHash", "slotNumber",
 )
 QUANTITIES = {
     "difficulty", "number", "gasLimit", "gasUsed", "timestamp", "baseFeePerGas",
-    "blobGasUsed", "excessBlobGas",
+    "blobGasUsed", "excessBlobGas", "slotNumber",
 }
 
 
@@ -58,9 +58,11 @@ def encode(block):
             if missing:
                 raise ValueError("header has a gap before " + key)
             keys.append(key)
-    # Execution forks after Prague need an explicit field-order update here.
-    if any(block.get(key) is not None for key in ("blockAccessListHash", "slotNumber")):
-        raise ValueError("unsupported newer header fields: update the encoder")
+    # Only explicitly recognized RPC metadata may be omitted from the consensus header.
+    metadata = {"hash", "size", "totalDifficulty", "transactions", "uncles", "withdrawals"}
+    unknown = set(block) - set(BASE_FIELDS) - set(TRAILING_FIELDS) - metadata
+    if unknown:
+        raise ValueError("unsupported header fields: " + ", ".join(sorted(unknown)))
     fields = [
         quantity(block[key]) if key in QUANTITIES else bytes.fromhex(block[key].removeprefix("0x"))
         for key in keys

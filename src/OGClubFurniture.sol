@@ -19,7 +19,7 @@ contract OGClubFurniture is ERC1155, ERC1155Supply, ERC2981, Ownable2Step {
 
     string public baseURI;
     bool public metadataFrozen;
-    /// @notice Set by the first successful grantMinter, the one immediate grant (meant for the box right after
+    /// @notice Set by the first successful grantMinter, the one immediate grant (meant for the raffle right after
     ///         deployment). Every later grant is a MINTER_DELAY proposal whatever the supply.
     bool public bootstrapped;
     mapping(address minter => bool allowed) public minters;
@@ -64,10 +64,10 @@ contract OGClubFurniture is ERC1155, ERC1155Supply, ERC2981, Ownable2Step {
         }
     }
 
-    /// @notice Anyone may activate a proposal once its delay has elapsed.
+    /// @notice Anyone may activate from maturity through maturity + 7 days, inclusive; later proposals lapse.
     function activateMinter(address minter) external {
         uint256 activatesAt = pendingMinters[minter];
-        if (activatesAt == 0) revert NoMinterProposal(minter);
+        if (activatesAt == 0 || block.timestamp > activatesAt + MINTER_DELAY) revert NoMinterProposal(minter);
         if (block.timestamp < activatesAt) revert MinterDelayNotElapsed(minter, activatesAt);
         delete pendingMinters[minter];
         minters[minter] = true;
@@ -76,7 +76,8 @@ contract OGClubFurniture is ERC1155, ERC1155Supply, ERC2981, Ownable2Step {
 
     /// @notice Cancel a pending proposal without changing any existing authorization.
     function cancelMinter(address minter) external onlyOwner {
-        if (pendingMinters[minter] == 0) revert NoMinterProposal(minter);
+        uint256 activatesAt = pendingMinters[minter];
+        if (activatesAt == 0 || block.timestamp > activatesAt + MINTER_DELAY) revert NoMinterProposal(minter);
         delete pendingMinters[minter];
         emit MinterProposalCancelled(minter);
     }

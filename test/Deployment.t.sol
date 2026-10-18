@@ -2,33 +2,47 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {Deploy} from "../script/Deploy.s.sol";
-import {OGClubBox} from "../src/OGClubBox.sol";
-import {OGClubFurniture} from "../src/OGClubFurniture.sol";
-import {MockOG} from "../src/mocks/MockOG.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Deploy} from "../script/Deploy.s.sol";
+import {OGClubFurniture} from "../src/OGClubFurniture.sol";
+import {OGClubFarmVault} from "../src/OGClubFarmVault.sol";
+import {OGClubStaking} from "../src/OGClubStaking.sol";
+import {OGClubRaffle} from "../src/OGClubRaffle.sol";
+import {MockOG} from "../src/mocks/MockOG.sol";
 
 contract DeploymentTest is Test {
-    function test_DeployExplicitParametersNoEnvironment() public {
+    function test_SepoliaDeploymentAndOwnerSetup() public {
+        vm.chainId(11155111);
         address owner = makeAddr("launch owner");
-        address vault = makeAddr("launch vault");
-        address token = makeAddr("configured token without deployed code");
         Deploy script = new Deploy();
-        (OGClubFurniture furniture, OGClubBox box) = script.deploy(token, vault, owner, 7 days);
+        (MockOG token, OGClubFurniture furniture, OGClubFarmVault vault, OGClubStaking staking, OGClubRaffle raffle) =
+            script.deploySepolia(owner);
+        assertEq(token.balanceOf(owner), token.INITIAL_SUPPLY());
         assertEq(furniture.owner(), owner);
-        assertEq(box.owner(), owner);
-        assertEq(address(box.token()), token);
-        assertEq(address(box.furniture()), address(furniture));
-        assertEq(box.vault(), vault);
-        assertEq(box.seasonNotice(), 7 days);
-        assertFalse(furniture.minters(address(box)));
+        assertEq(vault.owner(), owner);
+        assertEq(staking.owner(), owner);
+        assertEq(raffle.owner(), owner);
+        assertEq(address(vault.token()), address(token));
+        assertEq(address(staking.token()), address(token));
+        assertEq(staking.vault(), address(vault));
+        assertEq(address(raffle.staking()), address(staking));
+        assertEq(address(raffle.furniture()), address(furniture));
+        assertEq(staking.pointsPerTokenDay(), 1e18);
+        assertEq(raffle.raffleNotice(), 0);
         assertFalse(furniture.bootstrapped());
-        (address receiver, uint256 amount) = furniture.royaltyInfo(1, 10_000);
-        assertEq(receiver, owner);
-        assertEq(amount, 500);
+        assertFalse(staking.bootstrapped());
+        vm.startPrank(owner);
+        furniture.grantMinter(address(raffle));
+        staking.grantSpender(address(raffle));
+        vm.stopPrank();
+        assertTrue(furniture.minters(address(raffle)));
+        assertTrue(staking.spenders(address(raffle)));
+        checkRuntime(address(token).code);
         checkRuntime(address(furniture).code);
-        checkRuntime(address(box).code);
+        checkRuntime(address(vault).code);
+        checkRuntime(address(staking).code);
+        checkRuntime(address(raffle).code);
     }
 
     function checkRuntime(bytes memory code) internal pure {
@@ -44,69 +58,60 @@ contract DeploymentTest is Test {
         }
     }
 
-    function test_ConstructorsDoNotCallDependencies() public {
+    function test_ConstructorsDoNotCallDependenciesOrAssignFactoryOwner() public {
         address owner = makeAddr("owner");
-        address token = makeAddr("absent token");
-        address furniture = makeAddr("absent furniture");
-        OGClubBox box = new OGClubBox(IERC20(token), OGClubFurniture(furniture), owner, owner, 0);
-        assertEq(box.owner(), owner);
-        assertEq(address(box.furniture()), furniture);
+        address absent = makeAddr("absent dependency");
+        OGClubStaking staking = new OGClubStaking(IERC20(absent), owner, owner, 1e18);
+        OGClubFarmVault vault = new OGClubFarmVault(IERC20(absent), owner);
+        OGClubRaffle raffle = new OGClubRaffle(OGClubStaking(absent), OGClubFurniture(absent), owner, 7 days);
+        assertEq(staking.owner(), owner);
+        assertEq(vault.owner(), owner);
+        assertEq(raffle.owner(), owner);
+        assertEq(raffle.raffleNotice(), 604800);
+        assertEq(staking.accrualDenominator(), 0);
     }
 
-    function test_InvalidConstructorAddresses() public {
-        OGClubFurniture furniture = new OGClubFurniture(address(this), address(this));
-        MockOG token = new MockOG(address(this));
-        vm.expectRevert(OGClubBox.InvalidAddress.selector);
-        new OGClubBox(IERC20(address(0)), furniture, address(this), address(this), 0);
-        vm.expectRevert(OGClubBox.InvalidAddress.selector);
-        new OGClubBox(token, OGClubFurniture(address(0)), address(this), address(this), 0);
-        vm.expectRevert(OGClubBox.InvalidAddress.selector);
-        new OGClubBox(token, furniture, address(0), address(this), 0);
+    function test_InvalidConfigurationAndConstructorBounds() public {
+        address owner = makeAddr("owner");
+        IERC20 token = IERC20(makeAddr("token"));
+        OGClubFurniture furniture = new OGClubFurniture(owner, owner);
+        vm.expectRevert(OGClubStaking.InvalidAddress.selector);
+        new OGClubStaking(IERC20(address(0)), owner, owner, 1e18);
+        vm.expectRevert(OGClubStaking.InvalidAddress.selector);
+        new OGClubStaking(token, address(0), owner, 1e18);
+        vm.expectRevert(OGClubStaking.InvalidRate.selector);
+        new OGClubStaking(token, owner, owner, 0);
+        vm.expectRevert(OGClubStaking.InvalidRate.selector);
+        new OGClubStaking(token, owner, owner, uint256(type(uint96).max) + 1);
+        vm.expectRevert(OGClubFarmVault.InvalidAddress.selector);
+        new OGClubFarmVault(IERC20(address(0)), owner);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
-        new OGClubBox(token, furniture, address(this), address(0), 0);
+        new OGClubFarmVault(token, address(0));
+        OGClubStaking staking = new OGClubStaking(token, owner, owner, 1e18);
+        OGClubRaffle widest = new OGClubRaffle(staking, furniture, owner, 30 days);
+        assertEq(widest.raffleNotice(), 30 days);
+        vm.expectRevert(OGClubRaffle.InvalidNotice.selector);
+        new OGClubRaffle(staking, furniture, owner, 30 days + 1);
+        vm.expectRevert(OGClubRaffle.InvalidAddress.selector);
+        new OGClubRaffle(staking, OGClubFurniture(address(0)), owner, 0);
+        vm.expectRevert(OGClubRaffle.InvalidAddress.selector);
+        new OGClubRaffle(OGClubStaking(address(0)), furniture, owner, 0);
         Deploy script = new Deploy();
         vm.expectRevert(Deploy.InvalidConfiguration.selector);
-        script.deploy(address(0), address(this), address(this), 0);
-        vm.expectRevert(Deploy.InvalidConfiguration.selector);
-        script.deploy(address(token), address(0), address(this), 0);
-        vm.expectRevert(Deploy.InvalidConfiguration.selector);
-        script.deploy(address(token), address(this), address(0), 0);
+        script.deploy(address(0), owner, 1e18, 0);
+        vm.chainId(1);
+        vm.expectRevert(Deploy.MockOnlyOnTestnets.selector);
+        script.deploySepolia(owner);
     }
 
-    /// @dev The season notice is fixed at construction and bounded by MAX_SEASON_NOTICE (30 days): the bound
-    ///      itself is accepted, one second more is refused, through the constructor and through the script.
-    function test_SeasonNoticeIsImmutableAndAtMostThirtyDays() public {
-        OGClubFurniture furniture = new OGClubFurniture(address(this), address(this));
-        MockOG token = new MockOG(address(this));
-        uint256 maximum = 30 days;
-        OGClubBox widest = new OGClubBox(token, furniture, address(this), address(this), maximum);
-        assertEq(widest.MAX_SEASON_NOTICE(), maximum);
-        assertEq(widest.seasonNotice(), maximum);
-        vm.expectRevert(abi.encodeWithSelector(OGClubBox.InvalidSeasonNotice.selector, maximum + 1, maximum));
-        new OGClubBox(token, furniture, address(this), address(this), maximum + 1);
-        vm.expectRevert(abi.encodeWithSelector(OGClubBox.InvalidSeasonNotice.selector, type(uint256).max, maximum));
-        new OGClubBox(token, furniture, address(this), address(this), type(uint256).max);
-        Deploy script = new Deploy();
-        vm.expectRevert(abi.encodeWithSelector(OGClubBox.InvalidSeasonNotice.selector, maximum + 1, maximum));
-        script.deploy(address(token), address(this), address(this), maximum + 1);
-        (, OGClubBox none) = script.deploy(address(token), address(this), address(this), 0);
-        assertEq(none.seasonNotice(), 0);
-        // No setter exists: the notice cannot be changed after deployment.
-        (bool ok,) = address(none).call(abi.encodeWithSignature("setSeasonNotice(uint256)", 1));
-        assertFalse(ok);
-        assertEq(none.seasonNotice(), 0);
-    }
-
-    function test_MockSupplySymbolDecimalsAndPublicMint() public {
-        address recipient = makeAddr("explicit initial recipient");
+    function test_MockIsDeliberatelyUnlimitedTestnetOnly() public {
+        address recipient = makeAddr("recipient");
         MockOG token = new MockOG(recipient);
         assertEq(token.symbol(), "mockog");
         assertEq(token.decimals(), 18);
-        assertEq(token.totalSupply(), 1_000_000_000_000 ether);
-        assertEq(token.balanceOf(recipient), token.totalSupply());
-        assertEq(token.balanceOf(address(this)), 0);
-        vm.prank(makeAddr("any minter"));
+        assertEq(token.balanceOf(recipient), token.INITIAL_SUPPLY());
+        vm.prank(makeAddr("anyone"));
         token.mint(recipient, 7 ether);
-        assertEq(token.totalSupply(), 1_000_000_000_007 ether);
+        assertEq(token.totalSupply(), token.INITIAL_SUPPLY() + 7 ether);
     }
 }

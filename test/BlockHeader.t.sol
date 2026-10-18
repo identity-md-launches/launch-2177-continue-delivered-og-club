@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BoxTestBase} from "./helpers/BoxTestBase.sol";
+import {RaffleTestBase} from "./helpers/RaffleTestBase.sol";
 import {HeaderBuilder} from "./helpers/HeaderBuilder.sol";
 import {MainnetHeaders} from "./fixtures/MainnetHeaders.sol";
+import {SepoliaHeader} from "./fixtures/SepoliaHeader.sol";
 import {BlockHeader} from "../src/libraries/BlockHeader.sol";
 
 contract HeaderHarness {
@@ -12,7 +13,7 @@ contract HeaderHarness {
     }
 }
 
-contract BlockHeaderTest is BoxTestBase {
+contract BlockHeaderTest is RaffleTestBase {
     HeaderHarness internal harness;
 
     function setUp() public override {
@@ -20,35 +21,45 @@ contract BlockHeaderTest is BoxTestBase {
         harness = new HeaderHarness();
     }
 
-    function checkMainnet(bytes memory header, uint256 expectedNumber, bytes32 expectedHash, bytes32 expectedRandao)
+    function checkHeader(bytes memory header, uint256 expectedNumber, bytes32 expectedHash, bytes32 expectedRandao)
         internal
     {
-        assertEq(keccak256(header), expectedHash, "RLP must hash to the published mainnet hash");
+        assertEq(keccak256(header), expectedHash, "RLP must hash to the published block hash");
         (uint256 number, bytes32 randao) = harness.decode(header);
         assertEq(number, expectedNumber);
         assertEq(randao, expectedRandao, "decoded prevRandao must equal published mixHash");
-        vm.chainId(1);
+
         vm.roll(number - 3);
-        uint256 purchase = buy(10);
-        assertEq(target(purchase), number);
+        uint256 id = create(10);
+        enter(id, alice, 10);
+        closeAndCommit(id);
+        assertEq(target(id), number);
         vm.roll(number + 1);
         vm.setBlockhash(number, expectedHash);
-        assertOpenMatches(purchase, randao, header, false);
+        raffle.draw(id, header);
+        (,,,,,, bytes32 seed) = raffle.raffles(id);
+        assertEq(seed, randao);
+    }
+
+    function test_RealSepoliaHeaderWithAccessListHashAndSlotNumber() public {
+        vm.chainId(11155111);
+        (bytes memory header, uint256 number, bytes32 hash, bytes32 randao) = SepoliaHeader.fixture();
+        checkHeader(header, number, hash, randao);
     }
 
     function test_RealMainnetShanghaiHeader() public {
         (bytes memory header, uint256 number, bytes32 hash, bytes32 randao) = MainnetHeaders.shanghai();
-        checkMainnet(header, number, hash, randao);
+        checkHeader(header, number, hash, randao);
     }
 
     function test_RealMainnetCancunHeader() public {
         (bytes memory header, uint256 number, bytes32 hash, bytes32 randao) = MainnetHeaders.cancun();
-        checkMainnet(header, number, hash, randao);
+        checkHeader(header, number, hash, randao);
     }
 
     function test_RealMainnetPragueHeader() public {
         (bytes memory header, uint256 number, bytes32 hash, bytes32 randao) = MainnetHeaders.prague();
-        checkMainnet(header, number, hash, randao);
+        checkHeader(header, number, hash, randao);
     }
 
     function testFuzz_ArbitraryTrailingFieldCount(uint8 trailing, uint256 number, bytes32 randao) public view {
@@ -120,13 +131,14 @@ contract BlockHeaderTest is BoxTestBase {
     }
 
     function test_MalformedAuthenticatedHeaderCannotMint() public {
-        uint256 purchase = buy(1);
-        vm.roll(target(purchase) + 1);
-        vm.setBlockhash(target(purchase), keccak256(hex"c0"));
+        uint256 id = create(1);
+        closeAndCommit(id);
+        vm.roll(target(id) + 1);
+        vm.setBlockhash(target(id), keccak256(hex"c0"));
         vm.expectRevert(BlockHeader.InvalidHeaderFields.selector);
-        box.open(purchase, hex"c0");
-        (,,,, bool opened) = box.purchases(purchase);
-        assertFalse(opened);
+        raffle.draw(id, hex"c0");
+        (,,,,, bool drawn,) = raffle.raffles(id);
+        assertFalse(drawn);
         assertEq(furniture.totalSupply(), 0);
     }
 }

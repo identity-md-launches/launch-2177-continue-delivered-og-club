@@ -15,15 +15,30 @@
       ]
     },
     {
-      "contract": "OGClubBox",
+      "contract": "OGClubFarmVault",
       "constructorArgs": [
         "$contract:MockOG",
-        "$contract:OGClubFurniture",
+        "$owner"
+      ]
+    },
+    {
+      "contract": "OGClubStaking",
+      "constructorArgs": [
+        "$contract:MockOG",
+        "$contract:OGClubFarmVault",
         "$owner",
+        "1000000000000000000"
+      ]
+    },
+    {
+      "contract": "OGClubRaffle",
+      "constructorArgs": [
+        "$contract:OGClubStaking",
+        "$contract:OGClubFurniture",
         "$owner",
         "0"
       ]
     }
   ],
-  "notes": "Sepolia testnet deployment of the accepted OG Club lootbox application. Contracts are listed in constructor dependency order. MockOG(initialRecipient): $owner receives the initial 1,000,000,000,000 Mock OG tokens (symbol mockog, 18 decimals). Its mint(address,uint256) is unrestricted; it is a testnet payment token with no capped supply or economic value. OGClubFurniture(initialOwner, royaltyReceiver): both are $owner. The ERC-1155 collection starts with a 5% default royalty; its owner can change the receiver and rate up to 10%, and set metadata until permanently frozen. OGClubBox(token, furniture, vault, initialOwner, seasonNotice): uses the previously deployed MockOG and OGClubFurniture, with $owner as both vault and owner and a notice of 0 seconds for this test network. The notice is immutable and bounded by 30 days; a separate mainnet deployment uses 604800 seconds (7 days). createSeason requires opensAt >= block.timestamp + seasonNotice. Season terms remain immutable; closeSeason and cancelSeason retain their existing behavior. The owner can pause purchases and change the vault for future sales. Payments go directly to the burn address and current vault according to the season split. After deployment, the furniture owner must grantMinter(box) first, using the confirmed box address. The first successful grant is the only immediate grant and permanently sets bootstrapped. Every later grant, including re-granting a revoked box while totalSupply() is still zero, is a 7-day proposal requiring activateMinter after the delay. Revocation remains immediate. New purchases require the box to be an authorized minter; existing purchases can still open during revocation or the re-grant delay and store their rolls for later delivery without changing the recorded result. Authorized minters can mint arbitrary pieces and quantities; box caps are per season. The owner then sets the furniture base URI and creates each season at least seasonNotice before it opens. With this testnet notice of 0, a season may open in its creation block. These are subsequent owner operations described for handoff; the manifest contains only nonpayable constructor deployments."
+  "notes": "Sepolia (11155111) test deployment, in constructor dependency order. MockOG is the existing 18-decimal test token: $owner receives its initial trillion-token supply and anyone may mint more. It has no economic scarcity and must never be used on mainnet. All application owners and the initial furniture royalty receiver are $owner. OGClubFurniture retains ERC-1155 supply, metadata freezing, two-step ownership and a 5% default royalty adjustable up to 10%. OGClubFarmVault holds unstake fees; only delayed Merkle allocations can pay tokens out. OGClubStaking uses that immutable vault, charges a rounded-up 1% unstake fee, and accrues 1e18 point units (one point) per whole token per day. OGClubRaffle uses those staking and furniture contracts and raffleNotice=0. Pools and prize lists are immutable after creation. This manifest makes nonpayable constructor deployments only: it cannot grant roles. Before creating the first raffle, $owner must make furniture.grantMinter(raffle) and staking.grantSpender(raffle), using confirmed deployed addresses, as the FIRST grant in each contract. Those two first grants activate immediately; grants made after any successful first grant require permissionless activation between proposal+7 days and proposal+14 days inclusive, with immediate revocation. Until these owner operations are confirmed, the raffle cannot spend points or mint prizes. The owner then sets the furniture base URI and creates raffles. Later farming seasons reserve at most half the unreserved vault balance, open after 3 days, and have a 90-day claim window; proposals are at least 7 days apart. Draws use an authenticated future block header and permit retargeting only after target+256 blocks; withholding all draws until expiry allows selection bias. Production uses a separate deployment with the existing OG token (no MockOG), a fresh deployer, OWNER a Safe, and RAFFLE_NOTICE=604800. See README.md for setup, permissions, token assumptions and randomness limitations. No deployment or broadcast was performed by this adaptation."
 }
